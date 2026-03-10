@@ -66,6 +66,58 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const n = asNumber(value);
+    if (n !== undefined) return n;
+  }
+  return undefined;
+}
+
+function normalizeProgressMetrics(raw: unknown): ProgressEvent["metrics"] | undefined {
+  const obj = asObject(raw);
+  const stepIndex = firstNumber(obj.stepIndex, obj.step_index, obj.currentStep, obj.current_step);
+  const stepTotal = firstNumber(obj.stepTotal, obj.step_total, obj.totalSteps, obj.total_steps);
+  const percent = firstNumber(obj.percent, obj.progressPercent, obj.progress_percent);
+  const etaSec = firstNumber(obj.etaSec, obj.eta_sec);
+
+  if (stepIndex === undefined && stepTotal === undefined && percent === undefined && etaSec === undefined) {
+    return undefined;
+  }
+
+  return {
+    stepIndex,
+    stepTotal,
+    percent:
+      percent !== undefined
+        ? Math.max(0, Math.min(100, Math.round(percent)))
+        : stepIndex !== undefined && stepTotal !== undefined && stepTotal > 0
+        ? Math.max(0, Math.min(100, Math.round((stepIndex / stepTotal) * 100)))
+        : undefined,
+    etaSec,
+  };
+}
+
+function extractProgressMetrics(event: unknown, ctx: unknown): ProgressEvent["metrics"] | undefined {
+  const e = asObject(event);
+  const c = asObject(ctx);
+  const eData = asObject(e.data);
+  const cData = asObject(c.data);
+
+  return (
+    normalizeProgressMetrics(e.metrics) ??
+    normalizeProgressMetrics(e.progress) ??
+    normalizeProgressMetrics(eData.metrics) ??
+    normalizeProgressMetrics(eData.progress) ??
+    normalizeProgressMetrics(c.metrics) ??
+    normalizeProgressMetrics(c.progress) ??
+    normalizeProgressMetrics(cData.metrics) ??
+    normalizeProgressMetrics(cData.progress) ??
+    normalizeProgressMetrics(e) ??
+    normalizeProgressMetrics(c)
+  );
+}
+
 function parseConfig(raw: unknown): SkillConfig {
   const root = asObject(raw);
   const feishuRaw = asObject(root.feishu);
@@ -353,6 +405,7 @@ export default {
             toolName,
             toolCallId: asString(asObject(event).toolCallId),
           },
+          metrics: extractProgressMetrics(event, ctx),
         }),
       );
     });
@@ -386,6 +439,7 @@ export default {
             error,
           },
           metrics: {
+            ...extractProgressMetrics(event, ctx),
             durationMs: asNumber(asObject(event).durationMs),
           },
         }),
@@ -418,6 +472,7 @@ export default {
             error: asString(asObject(event).error),
           },
           metrics: {
+            ...extractProgressMetrics(event, ctx),
             durationMs: asNumber(asObject(event).durationMs),
           },
         }),
