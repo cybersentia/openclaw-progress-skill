@@ -30,46 +30,43 @@ function renderCard(state: RunProgressState, event?: ProgressEvent): Record<stri
       : "--";
 
   return {
-    msg_type: "interactive",
-    card: {
-      config: { wide_screen_mode: true },
-      header: {
-        title: {
-          tag: "plain_text",
-          content: title,
+    config: { wide_screen_mode: true },
+    header: {
+      title: {
+        tag: "plain_text",
+        content: title,
+      },
+    },
+    elements: [
+      {
+        tag: "div",
+        text: {
+          tag: "lark_md",
+          content: `**阶段**: ${state.currentPhase}\n**进度**: ${progressText}`,
         },
       },
-      elements: [
-        {
-          tag: "div",
-          text: {
-            tag: "lark_md",
-            content: `**阶段**: ${state.currentPhase}\n**进度**: ${progressText}`,
-          },
+      {
+        tag: "div",
+        text: {
+          tag: "lark_md",
+          content: `**最新信息**: ${state.lastMessage}`,
         },
-        {
-          tag: "div",
-          text: {
-            tag: "lark_md",
-            content: `**最新信息**: ${state.lastMessage}`,
+      },
+      event
+        ? {
+            tag: "note",
+            elements: [
+              {
+                tag: "plain_text",
+                content: `event=${event.stream}/${event.phase} seq=${event.seq}`,
+              },
+            ],
+          }
+        : {
+            tag: "note",
+            elements: [{ tag: "plain_text", content: `runId=${state.runId}` }],
           },
-        },
-        event
-          ? {
-              tag: "note",
-              elements: [
-                {
-                  tag: "plain_text",
-                  content: `event=${event.stream}/${event.phase} seq=${event.seq}`,
-                },
-              ],
-            }
-          : {
-              tag: "note",
-              elements: [{ tag: "plain_text", content: `runId=${state.runId}` }],
-            },
-      ],
-    },
+    ],
   };
 }
 
