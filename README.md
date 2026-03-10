@@ -1,5 +1,7 @@
 # OpenClaw Progress Skill
 
+[中文文档 / Chinese Documentation](./README.zh-CN.md)
+
 `openclaw-progress-skill` is a Feishu-first progress plugin for OpenClaw.
 
 It helps users see **what the agent is doing right now** during long-running runs by:
