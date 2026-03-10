@@ -1,11 +1,9 @@
-import {
-  DefaultProgressHub,
-  FeishuAdapter,
-  FeishuHttpPublisher,
-  reducer,
-  type AdapterContext,
-  type ProgressEvent,
-} from "./index";
+import { DefaultProgressHub } from "./progress-hub";
+import { FeishuAdapter } from "./feishu-adapter";
+import { FeishuHttpPublisher } from "./feishu-publisher";
+import { reducer } from "./reducer";
+import type { AdapterContext } from "./progress-adapter";
+import type { ProgressEvent } from "./progress-schema";
 
 type PluginApi = {
   pluginConfig?: Record<string, unknown>;
@@ -139,19 +137,19 @@ function extractSessionKeys(event: unknown, ctx: unknown): string[] {
 }
 
 export default {
-  id: "openclaw-progress-skill",
-  name: "OpenClaw Progress Skill",
+  id: "openclaw-progress-plugin",
+  name: "OpenClaw Progress Plugin",
   register(api: PluginApi) {
     const config = parseConfig(api.pluginConfig);
     const feishu = config.feishu;
 
     if (!feishu?.enabled) {
-      api.logger.info("[progress-skill] disabled by config");
+      api.logger.info("[progress-plugin] disabled by config");
       return;
     }
 
     if (!feishu.appId || !feishu.appSecret) {
-      api.logger.warn("[progress-skill] missing feishu.appId/appSecret, plugin disabled");
+      api.logger.warn("[progress-plugin] missing feishu.appId/appSecret, plugin disabled");
       return;
     }
 
@@ -213,7 +211,7 @@ export default {
       try {
         await hub.onEvent(ctx, event);
       } catch (error) {
-        api.logger.error(`[progress-skill] hub emit failed: ${String(error)}`);
+        api.logger.error(`[progress-plugin] hub emit failed: ${String(error)}`);
       }
     };
 
@@ -334,6 +332,6 @@ export default {
       seqByRun.delete(runId);
     });
 
-    api.logger.info("[progress-skill] plugin registered");
+    api.logger.info("[progress-plugin] plugin registered");
   },
 };

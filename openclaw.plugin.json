@@ -1,6 +1,6 @@
 {
-  "id": "openclaw-progress-skill",
-  "name": "OpenClaw Progress Skill",
+  "id": "openclaw-progress-plugin",
+  "name": "OpenClaw Progress Plugin",
   "description": "Stream task progress to chat clients with Feishu-first adapter support.",
   "version": "0.1.0",
   "configSchema": {

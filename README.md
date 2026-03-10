@@ -1,8 +1,8 @@
-# OpenClaw Progress Skill
+# OpenClaw Progress Plugin
 
 [中文文档 / Chinese Documentation](./README.zh-CN.md)
 
-`openclaw-progress-skill` is a Feishu-first progress plugin for OpenClaw.
+`openclaw-progress-plugin` is a Feishu-first progress plugin for OpenClaw.
 
 It helps users see **what the agent is doing right now** during long-running runs by:
 - emitting structured progress events,
@@ -54,7 +54,7 @@ So users no longer wait in a black box.
 ### 1) Clone plugin repository
 
 ```bash
-git clone https://github.com/cybersentia/openclaw-progress-skill.git /opt/openclaw-progress-skill
+git clone https://github.com/cybersentia/openclaw-progress-plugin.git /opt/openclaw-progress-plugin
 ```
 
 ### 2) Configure OpenClaw to load this plugin
@@ -66,11 +66,11 @@ Add this into your OpenClaw config (example):
   "plugins": {
     "enabled": true,
     "load": {
-      "paths": ["/opt/openclaw-progress-skill"]
+      "paths": ["/opt/openclaw-progress-plugin"]
     },
-    "allow": ["openclaw-progress-skill"],
+    "allow": ["openclaw-progress-plugin"],
     "entries": {
-      "openclaw-progress-skill": {
+      "openclaw-progress-plugin": {
         "enabled": true,
         "config": {
           "feishu": {

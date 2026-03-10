@@ -1,6 +1,6 @@
-# OpenClaw Progress Skill
+# OpenClaw Progress Plugin
 
-`openclaw-progress-skill` 是一个面向 OpenClaw 的**任务进度可视化插件**，当前以飞书（Feishu）为优先渠道。
+`openclaw-progress-plugin` 是一个面向 OpenClaw 的**任务进度可视化插件**，当前以飞书（Feishu）为优先渠道。
 
 它的目标是解决“长时间等待但不知道系统在做什么”的痛点：
 - 把执行过程转换成结构化进度事件，
@@ -52,7 +52,7 @@
 ### 1）拉取插件仓库
 
 ```bash
-git clone https://github.com/cybersentia/openclaw-progress-skill.git /opt/openclaw-progress-skill
+git clone https://github.com/cybersentia/openclaw-progress-plugin.git /opt/openclaw-progress-plugin
 ```
 
 ### 2）在 OpenClaw 配置中启用插件
@@ -64,11 +64,11 @@ git clone https://github.com/cybersentia/openclaw-progress-skill.git /opt/opencl
   "plugins": {
     "enabled": true,
     "load": {
-      "paths": ["/opt/openclaw-progress-skill"]
+      "paths": ["/opt/openclaw-progress-plugin"]
     },
-    "allow": ["openclaw-progress-skill"],
+    "allow": ["openclaw-progress-plugin"],
     "entries": {
-      "openclaw-progress-skill": {
+      "openclaw-progress-plugin": {
         "enabled": true,
         "config": {
           "feishu": {
