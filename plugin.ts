@@ -219,8 +219,7 @@ function extractFeishuConversationId(event: unknown, ctx: unknown): string | und
     asString(cData.chatId) ??
     asString(cData.chat_id) ??
     asString(cMessage.chatId) ??
-    asString(cMessage.chat_id) ??
-    asString(c.conversationId)
+    asString(cMessage.chat_id)
   );
 }
 
