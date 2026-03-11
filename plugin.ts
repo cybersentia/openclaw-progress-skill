@@ -224,6 +224,12 @@ function extractFeishuConversationId(event: unknown, ctx: unknown): string | und
   );
 }
 
+function ensureSessionKeys(sessionKeys: string[], conversationId?: string): { keys: string[]; fallbackUsed: boolean } {
+  if (sessionKeys.length > 0) return { keys: sessionKeys, fallbackUsed: false };
+  if (!conversationId) return { keys: [], fallbackUsed: false };
+  return { keys: [`conv:${conversationId}`], fallbackUsed: true };
+}
+
 function resolveStateFilePath(api: PluginApi, configuredPath?: string): string {
   const raw = configuredPath ?? DEFAULT_STATE_FILE;
   if (path.isAbsolute(raw)) return raw;
@@ -388,21 +394,40 @@ export default {
       }
       const conversationId = extractFeishuConversationId(event, ctx);
       if (!conversationId) {
+        api.logger.warn("[progress-plugin] skip route bind: missing conversationId in message_received");
         return;
       }
+
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), conversationId);
+      if (sessionKeysInfo.keys.length === 0) {
+        api.logger.warn(`[progress-plugin] skip route bind: no session keys for conversationId=${conversationId}`);
+        return;
+      }
+
       const route: Route = { channel: FEISHU_CHANNEL, conversationId, updatedAt: Date.now() };
-      for (const key of extractSessionKeys(event, ctx)) {
+      for (const key of sessionKeysInfo.keys) {
         routeBySessionKey.set(key, route);
       }
+
+      api.logger.info(
+        `[progress-plugin] route bound: conversationId=${conversationId} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
+      );
       persist();
     });
 
     api.on("before_tool_call", async (event, ctx) => {
-      const sessionKeys = extractSessionKeys(event, ctx);
-      const route = resolveRoute(sessionKeys);
-      if (!route) return;
+      const eventRunId = asString(asObject(event).runId);
+      const eventConversationId = extractFeishuConversationId(event, ctx);
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), eventConversationId);
+      const route = resolveRoute(sessionKeysInfo.keys);
+      if (!route) {
+        api.logger.warn(
+          `[progress-plugin] skip before_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
+        );
+        return;
+      }
 
-      const runId = resolveRun(sessionKeys, asString(asObject(event).runId));
+      const runId = resolveRun(sessionKeysInfo.keys, eventRunId);
       const seq = nextSeq(seqByRun, runId);
       const toolName = asString(asObject(event).toolName) ?? asString(asObject(ctx).toolName) ?? "unknown_tool";
 
@@ -429,11 +454,18 @@ export default {
     });
 
     api.on("after_tool_call", async (event, ctx) => {
-      const sessionKeys = extractSessionKeys(event, ctx);
-      const route = resolveRoute(sessionKeys);
-      if (!route) return;
+      const eventRunId = asString(asObject(event).runId);
+      const eventConversationId = extractFeishuConversationId(event, ctx);
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), eventConversationId);
+      const route = resolveRoute(sessionKeysInfo.keys);
+      if (!route) {
+        api.logger.warn(
+          `[progress-plugin] skip after_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
+        );
+        return;
+      }
 
-      const runId = resolveRun(sessionKeys, asString(asObject(event).runId));
+      const runId = resolveRun(sessionKeysInfo.keys, eventRunId);
       const seq = nextSeq(seqByRun, runId);
       const toolName = asString(asObject(event).toolName) ?? asString(asObject(ctx).toolName) ?? "unknown_tool";
       const error = asString(asObject(event).error);
@@ -465,11 +497,17 @@ export default {
     });
 
     api.on("agent_end", async (event, ctx) => {
-      const sessionKeys = extractSessionKeys(event, ctx);
-      const route = resolveRoute(sessionKeys);
-      if (!route) return;
+      const eventConversationId = extractFeishuConversationId(event, ctx);
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), eventConversationId);
+      const route = resolveRoute(sessionKeysInfo.keys);
+      if (!route) {
+        api.logger.warn(
+          `[progress-plugin] skip agent_end: route not found sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
+        );
+        return;
+      }
 
-      const runId = resolveRun(sessionKeys);
+      const runId = resolveRun(sessionKeysInfo.keys);
       const seq = nextSeq(seqByRun, runId);
       const success = Boolean(asObject(event).success);
 
@@ -496,7 +534,7 @@ export default {
         }),
       );
 
-      for (const key of sessionKeys) {
+      for (const key of sessionKeysInfo.keys) {
         runBySessionKey.delete(key);
       }
       seqByRun.delete(runId);
