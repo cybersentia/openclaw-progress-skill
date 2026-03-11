@@ -309,6 +309,7 @@ export default {
     const routeBySessionKey = new Map<string, Route>();
     const runBySessionKey = new Map<string, string>();
     const seqByRun = new Map<string, number>();
+    let lastConversationIdByChannel: string | undefined;
 
     const restore = loadPersistedState(stateFilePath);
     if (restore) {
@@ -324,6 +325,9 @@ export default {
           channel: entry.channel,
           updatedAt: entry.updatedAt,
         });
+        if (entry.channel === FEISHU_CHANNEL) {
+          lastConversationIdByChannel = entry.conversationId;
+        }
       }
       for (const entry of restore.runs) {
         runBySessionKey.set(entry.sessionKey, entry.runId);
@@ -432,6 +436,7 @@ export default {
       }
 
       bindRoute(sessionKeysInfo.keys, conversationId);
+      lastConversationIdByChannel = conversationId;
 
       api.logger.info(
         `[progress-plugin] route bound: conversationId=${conversationId} sessionKeys=${withRouteBridgeKeys(sessionKeysInfo.keys, conversationId).length} fallback=${sessionKeysInfo.fallbackUsed}`,
@@ -442,16 +447,18 @@ export default {
     api.on("before_tool_call", async (event, ctx) => {
       const eventRunId = asString(asObject(event).runId);
       const eventConversationId = extractFeishuConversationId(event, ctx);
-      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), eventConversationId);
-      const route = resolveRoute(sessionKeysInfo.keys, eventConversationId);
+      const fallbackConversationId = eventConversationId ?? lastConversationIdByChannel;
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackConversationId);
+      const route = resolveRoute(sessionKeysInfo.keys, fallbackConversationId);
       if (!route) {
         api.logger.warn(
-          `[progress-plugin] skip before_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
+          `[progress-plugin] skip before_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventConversationId ?? "none"} fallbackConversationId=${fallbackConversationId ?? "none"}`,
         );
         return;
       }
 
       bindRoute(sessionKeysInfo.keys, route.conversationId);
+      lastConversationIdByChannel = route.conversationId;
       const runId = resolveRun(sessionKeysInfo.keys, route.conversationId, eventRunId);
       const seq = nextSeq(seqByRun, runId);
       const toolName = asString(asObject(event).toolName) ?? asString(asObject(ctx).toolName) ?? "unknown_tool";
@@ -481,16 +488,18 @@ export default {
     api.on("after_tool_call", async (event, ctx) => {
       const eventRunId = asString(asObject(event).runId);
       const eventConversationId = extractFeishuConversationId(event, ctx);
-      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), eventConversationId);
-      const route = resolveRoute(sessionKeysInfo.keys, eventConversationId);
+      const fallbackConversationId = eventConversationId ?? lastConversationIdByChannel;
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackConversationId);
+      const route = resolveRoute(sessionKeysInfo.keys, fallbackConversationId);
       if (!route) {
         api.logger.warn(
-          `[progress-plugin] skip after_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
+          `[progress-plugin] skip after_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventConversationId ?? "none"} fallbackConversationId=${fallbackConversationId ?? "none"}`,
         );
         return;
       }
 
       bindRoute(sessionKeysInfo.keys, route.conversationId);
+      lastConversationIdByChannel = route.conversationId;
       const runId = resolveRun(sessionKeysInfo.keys, route.conversationId, eventRunId);
       const seq = nextSeq(seqByRun, runId);
       const toolName = asString(asObject(event).toolName) ?? asString(asObject(ctx).toolName) ?? "unknown_tool";
@@ -524,16 +533,18 @@ export default {
 
     api.on("agent_end", async (event, ctx) => {
       const eventConversationId = extractFeishuConversationId(event, ctx);
-      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), eventConversationId);
-      const route = resolveRoute(sessionKeysInfo.keys, eventConversationId);
+      const fallbackConversationId = eventConversationId ?? lastConversationIdByChannel;
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackConversationId);
+      const route = resolveRoute(sessionKeysInfo.keys, fallbackConversationId);
       if (!route) {
         api.logger.warn(
-          `[progress-plugin] skip agent_end: route not found sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
+          `[progress-plugin] skip agent_end: route not found sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventConversationId ?? "none"} fallbackConversationId=${fallbackConversationId ?? "none"}`,
         );
         return;
       }
 
       bindRoute(sessionKeysInfo.keys, route.conversationId);
+      lastConversationIdByChannel = route.conversationId;
       const runId = resolveRun(sessionKeysInfo.keys, route.conversationId);
       const seq = nextSeq(seqByRun, runId);
       const success = Boolean(asObject(event).success);
