@@ -206,6 +206,31 @@ function extractSessionKeys(event: unknown, ctx: unknown): string[] {
   return [...result];
 }
 
+function extractFeishuConversationId(event: unknown, ctx: unknown): string | undefined {
+  const e = asObject(event);
+  const c = asObject(ctx);
+  const eData = asObject(e.data);
+  const cData = asObject(c.data);
+  const eMessage = asObject(e.message);
+  const cMessage = asObject(c.message);
+
+  return (
+    asString(e.chatId) ??
+    asString(e.chat_id) ??
+    asString(eData.chatId) ??
+    asString(eData.chat_id) ??
+    asString(eMessage.chatId) ??
+    asString(eMessage.chat_id) ??
+    asString(c.chatId) ??
+    asString(c.chat_id) ??
+    asString(cData.chatId) ??
+    asString(cData.chat_id) ??
+    asString(cMessage.chatId) ??
+    asString(cMessage.chat_id) ??
+    asString(c.conversationId)
+  );
+}
+
 function resolveStateFilePath(api: PluginApi, configuredPath?: string): string {
   const raw = configuredPath ?? DEFAULT_STATE_FILE;
   if (path.isAbsolute(raw)) return raw;
@@ -368,7 +393,7 @@ export default {
       if (channelId !== FEISHU_CHANNEL) {
         return;
       }
-      const conversationId = asString(asObject(ctx).conversationId);
+      const conversationId = extractFeishuConversationId(event, ctx);
       if (!conversationId) {
         return;
       }
