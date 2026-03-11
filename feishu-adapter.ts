@@ -14,6 +14,14 @@ export interface FeishuPublisher {
   }): Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
+function durationFromTimestamps(startedAt: string, endedAt?: string): number | undefined {
+  const startMs = Date.parse(startedAt);
+  if (!Number.isFinite(startMs)) return undefined;
+  const endMs = endedAt ? Date.parse(endedAt) : Date.now();
+  if (!Number.isFinite(endMs) || endMs < startMs) return undefined;
+  return endMs - startMs;
+}
+
 function renderCard(state: RunProgressState, event?: ProgressEvent): Record<string, unknown> {
   const title = `任务进度 · ${state.status}`;
   const progressText =
@@ -30,8 +38,18 @@ function renderCard(state: RunProgressState, event?: ProgressEvent): Record<stri
       : state.currentPhase === "tool_start" || state.currentPhase === "tool_update" || state.currentPhase === "tool_end"
       ? "已进入执行阶段"
       : "进行中";
+
+  const runningElapsedMs = durationFromTimestamps(state.startedAt);
+  const terminalElapsedMs = durationFromTimestamps(state.startedAt, state.updatedAt);
+  const displayDurationMs =
+    state.status === "running"
+      ? runningElapsedMs
+      : state.durationMs !== undefined && state.durationMs >= 0
+      ? state.durationMs
+      : terminalElapsedMs;
+
   const durationText =
-    state.durationMs !== undefined && state.durationMs >= 0 ? `${(state.durationMs / 1000).toFixed(1)}s` : "--";
+    displayDurationMs !== undefined && displayDurationMs >= 0 ? `${(displayDurationMs / 1000).toFixed(1)}s` : "--";
   const durationLabel = state.status === "running" ? "已耗时" : "总耗时";
 
   return {
