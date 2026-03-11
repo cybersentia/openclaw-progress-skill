@@ -230,6 +230,19 @@ function ensureSessionKeys(sessionKeys: string[], conversationId?: string): { ke
   return { keys: [`conv:${conversationId}`], fallbackUsed: true };
 }
 
+function routeBridgeKey(conversationId?: string): string | undefined {
+  return conversationId ? `conv:${conversationId}` : undefined;
+}
+
+function uniqueKeys(keys: string[]): string[] {
+  return [...new Set(keys)];
+}
+
+function withRouteBridgeKeys(sessionKeys: string[], conversationId?: string): string[] {
+  const bridge = routeBridgeKey(conversationId);
+  return bridge ? uniqueKeys([...sessionKeys, bridge]) : sessionKeys;
+}
+
 function resolveStateFilePath(api: PluginApi, configuredPath?: string): string {
   const raw = configuredPath ?? DEFAULT_STATE_FILE;
   if (path.isAbsolute(raw)) return raw;
@@ -343,8 +356,9 @@ export default {
       });
     };
 
-    const resolveRoute = (sessionKeys: string[]): Route | undefined => {
-      for (const key of sessionKeys) {
+    const resolveRoute = (sessionKeys: string[], conversationId?: string): Route | undefined => {
+      const lookupKeys = withRouteBridgeKeys(sessionKeys, conversationId);
+      for (const key of lookupKeys) {
         const route = routeBySessionKey.get(key);
         if (route) return route;
       }
@@ -358,19 +372,32 @@ export default {
       return undefined;
     };
 
-    const resolveRun = (sessionKeys: string[], candidateRunId?: string): string => {
+    const bindRoute = (sessionKeys: string[], conversationId: string): void => {
+      const route: Route = { channel: FEISHU_CHANNEL, conversationId, updatedAt: Date.now() };
+      for (const key of withRouteBridgeKeys(sessionKeys, conversationId)) {
+        routeBySessionKey.set(key, route);
+      }
+    };
+
+    const resolveRun = (sessionKeys: string[], conversationId: string | undefined, candidateRunId?: string): string => {
+      const bindKeys = withRouteBridgeKeys(sessionKeys, conversationId);
       if (candidateRunId) {
-        for (const key of sessionKeys) {
+        for (const key of bindKeys) {
           runBySessionKey.set(key, candidateRunId);
         }
         return candidateRunId;
       }
-      for (const key of sessionKeys) {
+      for (const key of bindKeys) {
         const runId = runBySessionKey.get(key);
-        if (runId) return runId;
+        if (runId) {
+          for (const bindKey of bindKeys) {
+            runBySessionKey.set(bindKey, runId);
+          }
+          return runId;
+        }
       }
       const generated = resolveRunId(undefined);
-      for (const key of sessionKeys) {
+      for (const key of bindKeys) {
         runBySessionKey.set(key, generated);
       }
       return generated;
@@ -404,13 +431,10 @@ export default {
         return;
       }
 
-      const route: Route = { channel: FEISHU_CHANNEL, conversationId, updatedAt: Date.now() };
-      for (const key of sessionKeysInfo.keys) {
-        routeBySessionKey.set(key, route);
-      }
+      bindRoute(sessionKeysInfo.keys, conversationId);
 
       api.logger.info(
-        `[progress-plugin] route bound: conversationId=${conversationId} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
+        `[progress-plugin] route bound: conversationId=${conversationId} sessionKeys=${withRouteBridgeKeys(sessionKeysInfo.keys, conversationId).length} fallback=${sessionKeysInfo.fallbackUsed}`,
       );
       persist();
     });
@@ -419,7 +443,7 @@ export default {
       const eventRunId = asString(asObject(event).runId);
       const eventConversationId = extractFeishuConversationId(event, ctx);
       const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), eventConversationId);
-      const route = resolveRoute(sessionKeysInfo.keys);
+      const route = resolveRoute(sessionKeysInfo.keys, eventConversationId);
       if (!route) {
         api.logger.warn(
           `[progress-plugin] skip before_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
@@ -427,7 +451,8 @@ export default {
         return;
       }
 
-      const runId = resolveRun(sessionKeysInfo.keys, eventRunId);
+      bindRoute(sessionKeysInfo.keys, route.conversationId);
+      const runId = resolveRun(sessionKeysInfo.keys, route.conversationId, eventRunId);
       const seq = nextSeq(seqByRun, runId);
       const toolName = asString(asObject(event).toolName) ?? asString(asObject(ctx).toolName) ?? "unknown_tool";
 
@@ -457,7 +482,7 @@ export default {
       const eventRunId = asString(asObject(event).runId);
       const eventConversationId = extractFeishuConversationId(event, ctx);
       const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), eventConversationId);
-      const route = resolveRoute(sessionKeysInfo.keys);
+      const route = resolveRoute(sessionKeysInfo.keys, eventConversationId);
       if (!route) {
         api.logger.warn(
           `[progress-plugin] skip after_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
@@ -465,7 +490,8 @@ export default {
         return;
       }
 
-      const runId = resolveRun(sessionKeysInfo.keys, eventRunId);
+      bindRoute(sessionKeysInfo.keys, route.conversationId);
+      const runId = resolveRun(sessionKeysInfo.keys, route.conversationId, eventRunId);
       const seq = nextSeq(seqByRun, runId);
       const toolName = asString(asObject(event).toolName) ?? asString(asObject(ctx).toolName) ?? "unknown_tool";
       const error = asString(asObject(event).error);
@@ -499,7 +525,7 @@ export default {
     api.on("agent_end", async (event, ctx) => {
       const eventConversationId = extractFeishuConversationId(event, ctx);
       const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), eventConversationId);
-      const route = resolveRoute(sessionKeysInfo.keys);
+      const route = resolveRoute(sessionKeysInfo.keys, eventConversationId);
       if (!route) {
         api.logger.warn(
           `[progress-plugin] skip agent_end: route not found sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed}`,
@@ -507,7 +533,8 @@ export default {
         return;
       }
 
-      const runId = resolveRun(sessionKeysInfo.keys);
+      bindRoute(sessionKeysInfo.keys, route.conversationId);
+      const runId = resolveRun(sessionKeysInfo.keys, route.conversationId);
       const seq = nextSeq(seqByRun, runId);
       const success = Boolean(asObject(event).success);
 
