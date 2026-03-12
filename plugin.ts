@@ -18,9 +18,12 @@ type PluginApi = {
   resolvePath?: (input: string) => string;
 };
 
+type ReceiveIdType = "chat_id" | "open_id";
+
 type Route = {
   conversationId: string;
   channel: string;
+  receiveIdType: ReceiveIdType;
   updatedAt: number;
 };
 
@@ -45,13 +48,21 @@ type PersistedState = {
   version: 1;
   updatedAt: number;
   runMessages: Array<{ runId: string; messageId: string; updatedAt: number }>;
-  routes: Array<{ sessionKey: string; conversationId: string; channel: string; updatedAt: number }>;
+  routes: Array<{
+    sessionKey: string;
+    conversationId: string;
+    channel: string;
+    receiveIdType?: ReceiveIdType;
+    updatedAt: number;
+  }>;
   runs: Array<{ sessionKey: string; runId: string; updatedAt: number }>;
 };
 
 const FEISHU_CHANNEL = "feishu";
 const FEISHU_RECEIVE_ID_TYPE = "chat_id" as const;
 const FEISHU_CHAT_ID_PREFIX = "oc_";
+const FEISHU_OPEN_ID_PREFIX = "ou_";
+const FEISHU_USER_OPEN_ID_PREFIX = "user:ou_";
 const DEFAULT_STATE_FILE = ".openclaw-progress-plugin-state.json";
 const DEFAULT_RUN_MESSAGE_TTL_MS = 30 * 60 * 1000;
 
@@ -204,14 +215,64 @@ function isFeishuChatId(value?: string): value is string {
   return Boolean(value && value.startsWith(FEISHU_CHAT_ID_PREFIX));
 }
 
+function normalizeFeishuOpenId(value?: string): string | undefined {
+  if (!value) return undefined;
+  if (value.startsWith(FEISHU_USER_OPEN_ID_PREFIX)) {
+    return value.slice("user:".length);
+  }
+  return value;
+}
+
+function isFeishuOpenId(value?: string): value is string {
+  const normalized = normalizeFeishuOpenId(value);
+  return Boolean(normalized && normalized.startsWith(FEISHU_OPEN_ID_PREFIX));
+}
+
+type RouteTarget = {
+  conversationId: string;
+  receiveIdType: ReceiveIdType;
+};
+
+function inferFeishuRouteTarget(conversationId?: string): RouteTarget | undefined {
+  if (!conversationId) return undefined;
+  if (isFeishuChatId(conversationId)) {
+    return {
+      conversationId,
+      receiveIdType: "chat_id",
+    };
+  }
+  if (isFeishuOpenId(conversationId)) {
+    return {
+      conversationId: normalizeFeishuOpenId(conversationId) as string,
+      receiveIdType: "open_id",
+    };
+  }
+  return undefined;
+}
+
+function isValidFeishuRoute(route: { conversationId: string; receiveIdType: ReceiveIdType }): boolean {
+  return route.receiveIdType === "chat_id" ? isFeishuChatId(route.conversationId) : isFeishuOpenId(route.conversationId);
+}
+
 type ChatIdCandidate = {
   source: string;
   value?: string;
 };
 
-function firstValidFeishuChatId(candidates: ChatIdCandidate[]): string | undefined {
+function firstValidFeishuTarget(candidates: ChatIdCandidate[]): RouteTarget | undefined {
   for (const candidate of candidates) {
-    if (isFeishuChatId(candidate.value)) return candidate.value;
+    if (isFeishuChatId(candidate.value)) {
+      return {
+        conversationId: candidate.value,
+        receiveIdType: "chat_id",
+      };
+    }
+    if (isFeishuOpenId(candidate.value)) {
+      return {
+        conversationId: normalizeFeishuOpenId(candidate.value) as string,
+        receiveIdType: "open_id",
+      };
+    }
   }
   return undefined;
 }
@@ -241,8 +302,11 @@ function collectFeishuChatIdCandidates(event: unknown, ctx: unknown): ChatIdCand
     { source: "event.message.chat_id", value: asString(eMessage.chat_id) },
     { source: "event.metadata.chatId", value: asString(eMeta.chatId) },
     { source: "event.metadata.chat_id", value: asString(eMeta.chat_id) },
+    { source: "event.metadata.originatingTo", value: asString(eMeta.originatingTo) },
+    { source: "event.metadata.to", value: asString(eMeta.to) },
     { source: "ctx.chatId", value: asString(c.chatId) },
     { source: "ctx.chat_id", value: asString(c.chat_id) },
+    { source: "ctx.conversationId", value: asString(c.conversationId) },
     { source: "ctx.data.chatId", value: asString(cData.chatId) },
     { source: "ctx.data.chat_id", value: asString(cData.chat_id) },
     { source: "ctx.message.chatId", value: asString(cMessage.chatId) },
@@ -264,8 +328,8 @@ function collectFeishuChatIdCandidates(event: unknown, ctx: unknown): ChatIdCand
   ];
 }
 
-function extractFeishuConversationId(event: unknown, ctx: unknown): string | undefined {
-  return firstValidFeishuChatId(collectFeishuChatIdCandidates(event, ctx));
+function extractFeishuRouteTarget(event: unknown, ctx: unknown): RouteTarget | undefined {
+  return firstValidFeishuTarget(collectFeishuChatIdCandidates(event, ctx));
 }
 
 function formatChatIdCandidatesForLog(candidates: ChatIdCandidate[]): string {
@@ -446,15 +510,18 @@ export default {
         }
       }
       for (const entry of restore.routes) {
-        if (entry.channel === FEISHU_CHANNEL && !isFeishuChatId(entry.conversationId)) {
+        const inferredType = inferFeishuRouteTarget(entry.conversationId)?.receiveIdType;
+        const receiveIdType = entry.receiveIdType ?? inferredType ?? FEISHU_RECEIVE_ID_TYPE;
+        if (entry.channel === FEISHU_CHANNEL && !isValidFeishuRoute({ conversationId: entry.conversationId, receiveIdType })) {
           api.logger.warn(
-            `[progress-plugin] ignore invalid restored route conversationId=${entry.conversationId} sessionKey=${entry.sessionKey}`,
+            `[progress-plugin] ignore invalid restored route conversationId=${entry.conversationId} receiveIdType=${receiveIdType} sessionKey=${entry.sessionKey}`,
           );
           continue;
         }
         routeBySessionKey.set(entry.sessionKey, {
           conversationId: entry.conversationId,
           channel: entry.channel,
+          receiveIdType,
           updatedAt: entry.updatedAt,
         });
         if (entry.channel === FEISHU_CHANNEL) {
@@ -476,6 +543,7 @@ export default {
         sessionKey,
         conversationId: route.conversationId,
         channel: route.channel,
+        receiveIdType: route.receiveIdType,
         updatedAt: route.updatedAt,
       }));
       const runs = [...runBySessionKey.entries()].map(([sessionKey, runId]) => ({
@@ -492,36 +560,47 @@ export default {
       });
     };
 
-    const resolveRoute = (sessionKeys: string[], conversationId?: string): Route | undefined => {
-      const lookupKeys = withRouteBridgeKeys(sessionKeys, conversationId);
+    const resolveRoute = (sessionKeys: string[], routeTarget?: RouteTarget): Route | undefined => {
+      const lookupKeys = withRouteBridgeKeys(sessionKeys, routeTarget?.conversationId);
       for (const key of lookupKeys) {
         const route = routeBySessionKey.get(key);
         if (!route) continue;
-        if (route.channel === FEISHU_CHANNEL && !isFeishuChatId(route.conversationId)) {
+        if (route.channel === FEISHU_CHANNEL && !isValidFeishuRoute(route)) {
           api.logger.warn(
-            `[progress-plugin] ignore invalid route conversationId=${route.conversationId} sessionKey=${key}`,
+            `[progress-plugin] ignore invalid route conversationId=${route.conversationId} receiveIdType=${route.receiveIdType} sessionKey=${key}`,
           );
           continue;
         }
         return route;
       }
-      if (feishu.defaultConversationId && isFeishuChatId(feishu.defaultConversationId)) {
-        return {
-          channel: FEISHU_CHANNEL,
-          conversationId: feishu.defaultConversationId,
-          updatedAt: Date.now(),
-        };
+      if (feishu.defaultConversationId) {
+        const fallbackTarget = inferFeishuRouteTarget(feishu.defaultConversationId);
+        if (fallbackTarget) {
+          return {
+            channel: FEISHU_CHANNEL,
+            conversationId: fallbackTarget.conversationId,
+            receiveIdType: fallbackTarget.receiveIdType,
+            updatedAt: Date.now(),
+          };
+        }
       }
       return undefined;
     };
 
-    const bindRoute = (sessionKeys: string[], conversationId: string): void => {
-      if (!isFeishuChatId(conversationId)) {
-        api.logger.warn(`[progress-plugin] skip bindRoute: invalid conversationId=${conversationId}`);
+    const bindRoute = (sessionKeys: string[], target: RouteTarget): void => {
+      if (!isValidFeishuRoute(target)) {
+        api.logger.warn(
+          `[progress-plugin] skip bindRoute: invalid conversationId=${target.conversationId} receiveIdType=${target.receiveIdType}`,
+        );
         return;
       }
-      const route: Route = { channel: FEISHU_CHANNEL, conversationId, updatedAt: Date.now() };
-      for (const key of withRouteBridgeKeys(sessionKeys, conversationId)) {
+      const route: Route = {
+        channel: FEISHU_CHANNEL,
+        conversationId: target.conversationId,
+        receiveIdType: target.receiveIdType,
+        updatedAt: Date.now(),
+      };
+      for (const key of withRouteBridgeKeys(sessionKeys, target.conversationId)) {
         routeBySessionKey.set(key, route);
       }
     };
@@ -567,8 +646,8 @@ export default {
         return;
       }
       const chatIdCandidates = collectFeishuChatIdCandidates(event, ctx);
-      const conversationId = firstValidFeishuChatId(chatIdCandidates);
-      if (!conversationId) {
+      const routeTarget = firstValidFeishuTarget(chatIdCandidates);
+      if (!routeTarget) {
         const candidatesForLog = formatChatIdCandidatesForLog(chatIdCandidates);
         const debugSnapshot = buildChatIdDebugSnapshot(event, ctx);
         api.logger.warn(
@@ -577,37 +656,40 @@ export default {
         return;
       }
 
-      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), conversationId);
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), routeTarget.conversationId);
       if (sessionKeysInfo.keys.length === 0) {
-        api.logger.warn(`[progress-plugin] skip route bind: no session keys for conversationId=${conversationId}`);
+        api.logger.warn(`[progress-plugin] skip route bind: no session keys for conversationId=${routeTarget.conversationId}`);
         return;
       }
 
-      bindRoute(sessionKeysInfo.keys, conversationId);
-      lastConversationIdByChannel = conversationId;
+      bindRoute(sessionKeysInfo.keys, routeTarget);
+      lastConversationIdByChannel = routeTarget.conversationId;
 
       api.logger.info(
-        `[progress-plugin] route bound: conversationId=${conversationId} sessionKeys=${withRouteBridgeKeys(sessionKeysInfo.keys, conversationId).length} fallback=${sessionKeysInfo.fallbackUsed}`,
+        `[progress-plugin] route bound: conversationId=${routeTarget.conversationId} receiveIdType=${routeTarget.receiveIdType} sessionKeys=${withRouteBridgeKeys(sessionKeysInfo.keys, routeTarget.conversationId).length} fallback=${sessionKeysInfo.fallbackUsed}`,
       );
       persist();
     });
 
     api.on("before_tool_call", async (event, ctx) => {
       const eventRunId = asString(asObject(event).runId);
-      const eventConversationId = extractFeishuConversationId(event, ctx);
-      const fallbackConversationId = eventConversationId ?? lastConversationIdByChannel;
-      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackConversationId);
-      const route = resolveRoute(sessionKeysInfo.keys, fallbackConversationId);
+      const eventRouteTarget = extractFeishuRouteTarget(event, ctx);
+      const fallbackTarget = eventRouteTarget ?? inferFeishuRouteTarget(lastConversationIdByChannel);
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackTarget?.conversationId);
+      const route = resolveRoute(sessionKeysInfo.keys, fallbackTarget);
       if (!route) {
         const candidatesForLog = formatChatIdCandidatesForLog(collectFeishuChatIdCandidates(event, ctx));
         const debugSnapshot = buildChatIdDebugSnapshot(event, ctx);
         api.logger.warn(
-          `[progress-plugin] skip before_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventConversationId ?? "none"} fallbackConversationId=${fallbackConversationId ?? "none"} candidates=${candidatesForLog || "none"} ${debugSnapshot}`,
+          `[progress-plugin] skip before_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventRouteTarget?.conversationId ?? "none"} eventReceiveIdType=${eventRouteTarget?.receiveIdType ?? "none"} fallbackConversationId=${fallbackTarget?.conversationId ?? "none"} fallbackReceiveIdType=${fallbackTarget?.receiveIdType ?? "none"} candidates=${candidatesForLog || "none"} ${debugSnapshot}`,
         );
         return;
       }
 
-      bindRoute(sessionKeysInfo.keys, route.conversationId);
+      bindRoute(sessionKeysInfo.keys, {
+        conversationId: route.conversationId,
+        receiveIdType: route.receiveIdType,
+      });
       lastConversationIdByChannel = route.conversationId;
       const runId = resolveRun(sessionKeysInfo.keys, route.conversationId, eventRunId);
       const seq = nextSeq(seqByRun, runId);
@@ -617,6 +699,9 @@ export default {
         {
           channel: route.channel,
           conversationId: route.conversationId,
+          metadata: {
+            receiveIdType: route.receiveIdType,
+          },
         },
         buildEvent({
           runId,
@@ -637,20 +722,23 @@ export default {
 
     api.on("after_tool_call", async (event, ctx) => {
       const eventRunId = asString(asObject(event).runId);
-      const eventConversationId = extractFeishuConversationId(event, ctx);
-      const fallbackConversationId = eventConversationId ?? lastConversationIdByChannel;
-      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackConversationId);
-      const route = resolveRoute(sessionKeysInfo.keys, fallbackConversationId);
+      const eventRouteTarget = extractFeishuRouteTarget(event, ctx);
+      const fallbackTarget = eventRouteTarget ?? inferFeishuRouteTarget(lastConversationIdByChannel);
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackTarget?.conversationId);
+      const route = resolveRoute(sessionKeysInfo.keys, fallbackTarget);
       if (!route) {
         const candidatesForLog = formatChatIdCandidatesForLog(collectFeishuChatIdCandidates(event, ctx));
         const debugSnapshot = buildChatIdDebugSnapshot(event, ctx);
         api.logger.warn(
-          `[progress-plugin] skip after_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventConversationId ?? "none"} fallbackConversationId=${fallbackConversationId ?? "none"} candidates=${candidatesForLog || "none"} ${debugSnapshot}`,
+          `[progress-plugin] skip after_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventRouteTarget?.conversationId ?? "none"} eventReceiveIdType=${eventRouteTarget?.receiveIdType ?? "none"} fallbackConversationId=${fallbackTarget?.conversationId ?? "none"} fallbackReceiveIdType=${fallbackTarget?.receiveIdType ?? "none"} candidates=${candidatesForLog || "none"} ${debugSnapshot}`,
         );
         return;
       }
 
-      bindRoute(sessionKeysInfo.keys, route.conversationId);
+      bindRoute(sessionKeysInfo.keys, {
+        conversationId: route.conversationId,
+        receiveIdType: route.receiveIdType,
+      });
       lastConversationIdByChannel = route.conversationId;
       const runId = resolveRun(sessionKeysInfo.keys, route.conversationId, eventRunId);
       const seq = nextSeq(seqByRun, runId);
@@ -661,6 +749,9 @@ export default {
         {
           channel: route.channel,
           conversationId: route.conversationId,
+          metadata: {
+            receiveIdType: route.receiveIdType,
+          },
         },
         buildEvent({
           runId,
@@ -684,18 +775,21 @@ export default {
     });
 
     api.on("agent_end", async (event, ctx) => {
-      const eventConversationId = extractFeishuConversationId(event, ctx);
-      const fallbackConversationId = eventConversationId ?? lastConversationIdByChannel;
-      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackConversationId);
-      const route = resolveRoute(sessionKeysInfo.keys, fallbackConversationId);
+      const eventRouteTarget = extractFeishuRouteTarget(event, ctx);
+      const fallbackTarget = eventRouteTarget ?? inferFeishuRouteTarget(lastConversationIdByChannel);
+      const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackTarget?.conversationId);
+      const route = resolveRoute(sessionKeysInfo.keys, fallbackTarget);
       if (!route) {
         api.logger.warn(
-          `[progress-plugin] skip agent_end: route not found sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventConversationId ?? "none"} fallbackConversationId=${fallbackConversationId ?? "none"}`,
+          `[progress-plugin] skip agent_end: route not found sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventRouteTarget?.conversationId ?? "none"} eventReceiveIdType=${eventRouteTarget?.receiveIdType ?? "none"} fallbackConversationId=${fallbackTarget?.conversationId ?? "none"} fallbackReceiveIdType=${fallbackTarget?.receiveIdType ?? "none"}`,
         );
         return;
       }
 
-      bindRoute(sessionKeysInfo.keys, route.conversationId);
+      bindRoute(sessionKeysInfo.keys, {
+        conversationId: route.conversationId,
+        receiveIdType: route.receiveIdType,
+      });
       lastConversationIdByChannel = route.conversationId;
       const runId = resolveRun(sessionKeysInfo.keys, route.conversationId);
       const seq = nextSeq(seqByRun, runId);
@@ -705,6 +799,9 @@ export default {
         {
           channel: route.channel,
           conversationId: route.conversationId,
+          metadata: {
+            receiveIdType: route.receiveIdType,
+          },
         },
         buildEvent({
           runId,
