@@ -96,6 +96,38 @@ Configuration notes:
   - Usually leave it unset and rely on automatic routing.
   - If you must set it, provide a real Feishu `chat_id` from raw Feishu events or gateway logs.
 
+#### Quick fallback for DM route-miss
+If logs show:
+- `skip route bind: missing conversationId in message_received`
+- `skip before_tool_call/after_tool_call: route not found`
+
+Use a fixed `chat_id` fallback first so progress cards remain available:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openclaw-progress-plugin": {
+        "config": {
+          "feishu": {
+            "defaultConversationId": "oc_xxx"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+How to get `oc_xxx`:
+- read `chat_id` from raw Feishu inbound events;
+- or use the `oc_...` value already printed in gateway/channel logs;
+- send one message in the target DM/group first, then pick that chat id from logs.
+
+Notes:
+- This is a **fixed destination** fallback, suitable for single-conversation debugging or temporary continuity.
+- For multi-conversation production routing, fix OpenClaw upstream canonical mapping so `conversationId` is present in plugin hooks.
+
 ### 3) Restart OpenClaw gateway
 
 Restart your deployed OpenClaw gateway so plugin discovery reloads.

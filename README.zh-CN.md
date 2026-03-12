@@ -94,6 +94,38 @@ git clone https://github.com/cybersentia/openclaw-progress-plugin.git /opt/openc
   - 常规场景建议不填，优先使用插件自动路由。
   - 若必须填写，请填写真实飞书 `chat_id`，可从飞书原始事件或网关日志中获取。
 
+#### DM 场景快速兜底（推荐）
+如果你在日志中看到：
+- `skip route bind: missing conversationId in message_received`
+- `skip before_tool_call/after_tool_call: route not found`
+
+可先使用固定 `chat_id` 兜底，确保进度卡可用：
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openclaw-progress-plugin": {
+        "config": {
+          "feishu": {
+            "defaultConversationId": "oc_xxx"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`oc_xxx` 获取方式：
+- 从飞书原始事件中的 `chat_id` 获取；
+- 或从网关/渠道日志中已打印的 `oc_...` 获取；
+- 建议先在目标群聊或私聊发一条消息，再读取对应日志值。
+
+注意：
+- 这是**固定投递目标**，适合单会话调试或临时兜底；
+- 多会话并发场景建议修复 OpenClaw 上游 canonical 映射（确保 `conversationId` 能传入 plugin hook）。
+
 ### 3）重启 OpenClaw gateway
 
 重启后，OpenClaw 会重新发现并加载插件。
