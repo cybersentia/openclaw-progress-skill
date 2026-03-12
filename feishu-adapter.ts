@@ -5,6 +5,7 @@ import type { RunProgressState } from "./progress-state";
 export interface FeishuPublisher {
   sendMessage(params: {
     conversationId: string;
+    receiveIdType?: "chat_id" | "open_id";
     content: Record<string, unknown>;
   }): Promise<{ ok: true; messageId: string } | { ok: false; error: string }>;
 
@@ -112,12 +113,18 @@ export class FeishuAdapter implements ProgressAdapter {
   }
 
   private async sendAndBind(
-    conversationId: string,
+    ctx: AdapterContext,
     state: RunProgressState,
     card: Record<string, unknown>,
   ): Promise<AdapterEmitResult> {
+    const receiveIdType =
+      ctx.metadata && (ctx.metadata.receiveIdType === "chat_id" || ctx.metadata.receiveIdType === "open_id")
+        ? (ctx.metadata.receiveIdType as "chat_id" | "open_id")
+        : undefined;
+
     const sent = await this.publisher.sendMessage({
-      conversationId,
+      conversationId: ctx.conversationId,
+      receiveIdType,
       content: card,
     });
     if (!sent.ok) return { ok: false, error: sent.error };
@@ -141,10 +148,10 @@ export class FeishuAdapter implements ProgressAdapter {
       if (updated.ok) return { ok: true, messageId: existingMessageId };
 
       // update 失败时回退成新发一条，避免 run 卡死在“永远更新失败”状态
-      return this.sendAndBind(ctx.conversationId, state, card);
+      return this.sendAndBind(ctx, state, card);
     }
 
-    return this.sendAndBind(ctx.conversationId, state, card);
+    return this.sendAndBind(ctx, state, card);
   }
 
   async emitCheckpoint(ctx: AdapterContext, state: RunProgressState): Promise<AdapterEmitResult> {
@@ -158,10 +165,10 @@ export class FeishuAdapter implements ProgressAdapter {
       });
       if (updated.ok) return { ok: true, messageId: existingMessageId };
 
-      return this.sendAndBind(ctx.conversationId, state, card);
+      return this.sendAndBind(ctx, state, card);
     }
 
-    return this.sendAndBind(ctx.conversationId, state, card);
+    return this.sendAndBind(ctx, state, card);
   }
 
   async emitFinal(ctx: AdapterContext, state: RunProgressState): Promise<AdapterEmitResult> {

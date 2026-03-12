@@ -48,13 +48,18 @@ export class FeishuHttpPublisher implements FeishuPublisher {
     this.timeoutMs = options.timeoutMs ?? 10_000;
   }
 
-  async sendMessage(params: { conversationId: string; content: Record<string, unknown> }) {
+  async sendMessage(params: {
+    conversationId: string;
+    receiveIdType?: "chat_id" | "open_id";
+    content: Record<string, unknown>;
+  }) {
     try {
       const token = await this.getTenantAccessToken();
 
       const firstTry = await this.sendWithMode({
         token,
         conversationId: params.conversationId,
+        receiveIdType: params.receiveIdType,
         content: params.content,
         mode: "raw-card",
       });
@@ -67,6 +72,7 @@ export class FeishuHttpPublisher implements FeishuPublisher {
       const retry = await this.sendWithMode({
         token,
         conversationId: params.conversationId,
+        receiveIdType: params.receiveIdType,
         content: params.content,
         mode: "wrapped-card",
       });
@@ -117,6 +123,7 @@ export class FeishuHttpPublisher implements FeishuPublisher {
   private async sendWithMode(params: {
     token: string;
     conversationId: string;
+    receiveIdType?: "chat_id" | "open_id";
     content: Record<string, unknown>;
     mode: CardPayloadMode;
   }): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> {
@@ -126,9 +133,10 @@ export class FeishuHttpPublisher implements FeishuPublisher {
       content: JSON.stringify(this.formatCardContent(params.content, params.mode)),
     };
 
+    const receiveIdType = params.receiveIdType ?? this.receiveIdType;
     const raw = await this.requestRaw({
       method: "POST",
-      path: `/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(this.receiveIdType)}`,
+      path: `/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`,
       token: params.token,
       body,
     });
