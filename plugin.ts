@@ -204,35 +204,76 @@ function isFeishuChatId(value?: string): value is string {
   return Boolean(value && value.startsWith(FEISHU_CHAT_ID_PREFIX));
 }
 
-function firstValidFeishuChatId(...values: Array<string | undefined>): string | undefined {
-  for (const value of values) {
-    if (isFeishuChatId(value)) return value;
+type ChatIdCandidate = {
+  source: string;
+  value?: string;
+};
+
+function firstValidFeishuChatId(candidates: ChatIdCandidate[]): string | undefined {
+  for (const candidate of candidates) {
+    if (isFeishuChatId(candidate.value)) return candidate.value;
   }
   return undefined;
 }
 
-function extractFeishuConversationId(event: unknown, ctx: unknown): string | undefined {
+function collectFeishuChatIdCandidates(event: unknown, ctx: unknown): ChatIdCandidate[] {
   const e = asObject(event);
   const c = asObject(ctx);
   const eData = asObject(e.data);
   const cData = asObject(c.data);
   const eMessage = asObject(e.message);
   const cMessage = asObject(c.message);
+  const eMeta = asObject(e.metadata);
+  const cMeta = asObject(c.metadata);
+  const eRaw = asObject(e.rawEvent);
+  const cRaw = asObject(c.rawEvent);
+  const eRawEvent = asObject(eRaw.event);
+  const cRawEvent = asObject(cRaw.event);
+  const eRawMessage = asObject(eRaw.message);
+  const cRawMessage = asObject(cRaw.message);
 
-  return firstValidFeishuChatId(
-    asString(e.chatId),
-    asString(e.chat_id),
-    asString(eData.chatId),
-    asString(eData.chat_id),
-    asString(eMessage.chatId),
-    asString(eMessage.chat_id),
-    asString(c.chatId),
-    asString(c.chat_id),
-    asString(cData.chatId),
-    asString(cData.chat_id),
-    asString(cMessage.chatId),
-    asString(cMessage.chat_id),
-  );
+  return [
+    { source: "event.chatId", value: asString(e.chatId) },
+    { source: "event.chat_id", value: asString(e.chat_id) },
+    { source: "event.data.chatId", value: asString(eData.chatId) },
+    { source: "event.data.chat_id", value: asString(eData.chat_id) },
+    { source: "event.message.chatId", value: asString(eMessage.chatId) },
+    { source: "event.message.chat_id", value: asString(eMessage.chat_id) },
+    { source: "event.metadata.chatId", value: asString(eMeta.chatId) },
+    { source: "event.metadata.chat_id", value: asString(eMeta.chat_id) },
+    { source: "ctx.chatId", value: asString(c.chatId) },
+    { source: "ctx.chat_id", value: asString(c.chat_id) },
+    { source: "ctx.data.chatId", value: asString(cData.chatId) },
+    { source: "ctx.data.chat_id", value: asString(cData.chat_id) },
+    { source: "ctx.message.chatId", value: asString(cMessage.chatId) },
+    { source: "ctx.message.chat_id", value: asString(cMessage.chat_id) },
+    { source: "ctx.metadata.chatId", value: asString(cMeta.chatId) },
+    { source: "ctx.metadata.chat_id", value: asString(cMeta.chat_id) },
+    { source: "event.rawEvent.chat_id", value: asString(eRaw.chat_id) },
+    { source: "event.rawEvent.chatId", value: asString(eRaw.chatId) },
+    { source: "event.rawEvent.event.chat_id", value: asString(eRawEvent.chat_id) },
+    { source: "event.rawEvent.event.chatId", value: asString(eRawEvent.chatId) },
+    { source: "event.rawEvent.message.chat_id", value: asString(eRawMessage.chat_id) },
+    { source: "event.rawEvent.message.chatId", value: asString(eRawMessage.chatId) },
+    { source: "ctx.rawEvent.chat_id", value: asString(cRaw.chat_id) },
+    { source: "ctx.rawEvent.chatId", value: asString(cRaw.chatId) },
+    { source: "ctx.rawEvent.event.chat_id", value: asString(cRawEvent.chat_id) },
+    { source: "ctx.rawEvent.event.chatId", value: asString(cRawEvent.chatId) },
+    { source: "ctx.rawEvent.message.chat_id", value: asString(cRawMessage.chat_id) },
+    { source: "ctx.rawEvent.message.chatId", value: asString(cRawMessage.chatId) },
+  ];
+}
+
+function extractFeishuConversationId(event: unknown, ctx: unknown): string | undefined {
+  return firstValidFeishuChatId(collectFeishuChatIdCandidates(event, ctx));
+}
+
+function formatChatIdCandidatesForLog(candidates: ChatIdCandidate[]): string {
+  return candidates
+    .filter((candidate) => candidate.value)
+    .slice(0, 12)
+    .map((candidate) => `${candidate.source}=${candidate.value}`)
+    .join(", ");
 }
 
 function ensureSessionKeys(sessionKeys: string[], conversationId?: string): { keys: string[]; fallbackUsed: boolean } {
@@ -451,9 +492,13 @@ export default {
       if (channelId !== FEISHU_CHANNEL) {
         return;
       }
-      const conversationId = extractFeishuConversationId(event, ctx);
+      const chatIdCandidates = collectFeishuChatIdCandidates(event, ctx);
+      const conversationId = firstValidFeishuChatId(chatIdCandidates);
       if (!conversationId) {
-        api.logger.warn("[progress-plugin] skip route bind: missing conversationId in message_received");
+        const candidatesForLog = formatChatIdCandidatesForLog(chatIdCandidates);
+        api.logger.warn(
+          `[progress-plugin] skip route bind: missing conversationId in message_received channelId=${channelId ?? "none"} candidates=${candidatesForLog || "none"}`,
+        );
         return;
       }
 
