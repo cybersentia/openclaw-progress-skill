@@ -276,6 +276,80 @@ function formatChatIdCandidatesForLog(candidates: ChatIdCandidate[]): string {
     .join(", ");
 }
 
+function formatObjectKeysForLog(value: unknown, max = 24): string {
+  const keys = Object.keys(asObject(value));
+  if (keys.length === 0) return "none";
+  const sliced = keys.slice(0, max);
+  return `${sliced.join("|")}${keys.length > max ? "|..." : ""}`;
+}
+
+function maskValueForLog(value: unknown): string {
+  if (value === null || value === undefined) return String(value);
+  const text = String(value);
+  if (text.length <= 14) return text;
+  return `${text.slice(0, 8)}...${text.slice(-4)}`;
+}
+
+function collectChatLikePathsForLog(params: {
+  value: unknown;
+  root: string;
+  out: string[];
+  seen: Set<unknown>;
+  depth: number;
+  maxDepth: number;
+  maxEntries: number;
+}): void {
+  const { value, root, out, seen, depth, maxDepth, maxEntries } = params;
+  if (out.length >= maxEntries) return;
+  if (!value || typeof value !== "object") return;
+  if (seen.has(value)) return;
+  seen.add(value);
+
+  const obj = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(obj)) {
+    if (out.length >= maxEntries) break;
+    const path = `${root}.${key}`;
+    if (/(chat|conversation|receive)/i.test(key) && child !== undefined && child !== null) {
+      if (typeof child !== "object") {
+        out.push(`${path}=${maskValueForLog(child)}`);
+      }
+    }
+    if (depth < maxDepth && child && typeof child === "object") {
+      collectChatLikePathsForLog({
+        value: child,
+        root: path,
+        out,
+        seen,
+        depth: depth + 1,
+        maxDepth,
+        maxEntries,
+      });
+    }
+  }
+}
+
+function buildChatIdDebugSnapshot(event: unknown, ctx: unknown): string {
+  const e = asObject(event);
+  const c = asObject(ctx);
+  const out: string[] = [];
+  const seen = new Set<unknown>();
+
+  collectChatLikePathsForLog({ value: e, root: "event", out, seen, depth: 0, maxDepth: 4, maxEntries: 20 });
+  collectChatLikePathsForLog({ value: c, root: "ctx", out, seen, depth: 0, maxDepth: 4, maxEntries: 20 });
+
+  return [
+    `eventKeys=${formatObjectKeysForLog(e)}`,
+    `ctxKeys=${formatObjectKeysForLog(c)}`,
+    `event.dataKeys=${formatObjectKeysForLog(e.data)}`,
+    `ctx.dataKeys=${formatObjectKeysForLog(c.data)}`,
+    `event.metadataKeys=${formatObjectKeysForLog(e.metadata)}`,
+    `ctx.metadataKeys=${formatObjectKeysForLog(c.metadata)}`,
+    `event.rawEventKeys=${formatObjectKeysForLog(e.rawEvent)}`,
+    `ctx.rawEventKeys=${formatObjectKeysForLog(c.rawEvent)}`,
+    `chatLikePaths=${out.length > 0 ? out.join(", ") : "none"}`,
+  ].join(" ");
+}
+
 function ensureSessionKeys(sessionKeys: string[], conversationId?: string): { keys: string[]; fallbackUsed: boolean } {
   if (sessionKeys.length > 0) return { keys: sessionKeys, fallbackUsed: false };
   if (!conversationId) return { keys: [], fallbackUsed: false };
@@ -496,8 +570,9 @@ export default {
       const conversationId = firstValidFeishuChatId(chatIdCandidates);
       if (!conversationId) {
         const candidatesForLog = formatChatIdCandidatesForLog(chatIdCandidates);
+        const debugSnapshot = buildChatIdDebugSnapshot(event, ctx);
         api.logger.warn(
-          `[progress-plugin] skip route bind: missing conversationId in message_received channelId=${channelId ?? "none"} candidates=${candidatesForLog || "none"}`,
+          `[progress-plugin] skip route bind: missing conversationId in message_received channelId=${channelId ?? "none"} candidates=${candidatesForLog || "none"} ${debugSnapshot}`,
         );
         return;
       }
@@ -524,8 +599,10 @@ export default {
       const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackConversationId);
       const route = resolveRoute(sessionKeysInfo.keys, fallbackConversationId);
       if (!route) {
+        const candidatesForLog = formatChatIdCandidatesForLog(collectFeishuChatIdCandidates(event, ctx));
+        const debugSnapshot = buildChatIdDebugSnapshot(event, ctx);
         api.logger.warn(
-          `[progress-plugin] skip before_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventConversationId ?? "none"} fallbackConversationId=${fallbackConversationId ?? "none"}`,
+          `[progress-plugin] skip before_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventConversationId ?? "none"} fallbackConversationId=${fallbackConversationId ?? "none"} candidates=${candidatesForLog || "none"} ${debugSnapshot}`,
         );
         return;
       }
@@ -565,8 +642,10 @@ export default {
       const sessionKeysInfo = ensureSessionKeys(extractSessionKeys(event, ctx), fallbackConversationId);
       const route = resolveRoute(sessionKeysInfo.keys, fallbackConversationId);
       if (!route) {
+        const candidatesForLog = formatChatIdCandidatesForLog(collectFeishuChatIdCandidates(event, ctx));
+        const debugSnapshot = buildChatIdDebugSnapshot(event, ctx);
         api.logger.warn(
-          `[progress-plugin] skip after_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventConversationId ?? "none"} fallbackConversationId=${fallbackConversationId ?? "none"}`,
+          `[progress-plugin] skip after_tool_call: route not found runId=${eventRunId ?? "unknown"} sessionKeys=${sessionKeysInfo.keys.length} fallback=${sessionKeysInfo.fallbackUsed} eventConversationId=${eventConversationId ?? "none"} fallbackConversationId=${fallbackConversationId ?? "none"} candidates=${candidatesForLog || "none"} ${debugSnapshot}`,
         );
         return;
       }
