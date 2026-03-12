@@ -4,18 +4,28 @@
 
 `openclaw-progress-plugin` is a Feishu-first progress plugin for OpenClaw.
 
-It helps users see **what the agent is doing right now** during long-running runs by:
+It turns long-running, opaque execution into visible progress by:
 - emitting structured progress events,
-- aggregating run state,
-- and updating a single message card in chat clients (Feishu first).
+- aggregating them into run state,
+- and updating a single message card continuously in chat.
+
+---
+
+## TL;DR (Quick Start)
+
+1. Clone this repository to your plugin directory.
+2. Enable plugin loading and allow `openclaw-progress-plugin` in OpenClaw config.
+3. Configure Feishu `appId` + `appSecret`, restart gateway, then run one test in DM/group.
+
+If route binding is temporarily unavailable, set `feishu.defaultConversationId` as a short-term fallback.
 
 ---
 
 ## What this plugin solves
 
-Many users only see the final answer and cannot perceive intermediate execution steps.
+In default chat-agent flows, users often only see the final answer and cannot perceive intermediate execution.
 
-This plugin adds visible progress checkpoints such as:
+This plugin adds visible checkpoints such as:
 - tool call started
 - tool call finished
 - run completed / failed
@@ -45,7 +55,7 @@ So users no longer wait in a black box.
 2. Feishu app credentials:
    - `appId`
    - `appSecret`
-3. A target Feishu conversation id (`chat_id` by default)
+3. A target Feishu conversation target (normally resolved automatically)
 
 ---
 
@@ -58,8 +68,6 @@ git clone https://github.com/cybersentia/openclaw-progress-plugin.git /opt/openc
 ```
 
 ### 2) Configure OpenClaw to load this plugin
-
-Add this into your OpenClaw config (example):
 
 ```json
 {
@@ -90,47 +98,48 @@ Add this into your OpenClaw config (example):
 }
 ```
 
-Configuration notes:
-- Delivery target is fixed to Feishu `chat_id` to ensure cards stay in the current conversation (group or DM).
-- `defaultConversationId`: **advanced optional fallback**. Used only when route binding is temporarily unavailable.
-  - Usually leave it unset and rely on automatic routing.
-  - If you must set it, provide a real Feishu `chat_id` from raw Feishu events or gateway logs.
-
-#### Quick fallback for DM route-miss
-If logs show:
-- `skip route bind: missing conversationId in message_received`
-- `skip before_tool_call/after_tool_call: route not found`
-
-Use a fixed `chat_id` fallback first so progress cards remain available:
-
-```json
-{
-  "plugins": {
-    "entries": {
-      "openclaw-progress-plugin": {
-        "config": {
-          "feishu": {
-            "defaultConversationId": "oc_xxx"
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-How to get `oc_xxx`:
-- read `chat_id` from raw Feishu inbound events;
-- or use the `oc_...` value already printed in gateway/channel logs;
-- send one message in the target DM/group first, then pick that chat id from logs.
-
-Notes:
-- This is a **fixed destination** fallback, suitable for single-conversation debugging or temporary continuity.
-- For multi-conversation production routing, fix OpenClaw upstream canonical mapping so `conversationId` is present in plugin hooks.
-
 ### 3) Restart OpenClaw gateway
 
 Restart your deployed OpenClaw gateway so plugin discovery reloads.
+
+---
+
+## Configuration reference
+
+### `config.feishu`
+
+| Field | Type | Required | Default | Notes |
+|---|---|---:|---|---|
+| `enabled` | boolean | no | `true` | Enable/disable Feishu adapter |
+| `appId` | string | yes | - | Feishu app id |
+| `appSecret` | string | yes | - | Feishu app secret |
+| `baseUrl` | string | no | `https://open.feishu.cn` | Feishu OpenAPI base URL |
+| `timeoutMs` | number | no | `10000` | HTTP timeout |
+| `defaultConversationId` | string | no | unset | Fallback route target when normal route binding is missing |
+| `stateFile` | string | no | `.openclaw-progress-plugin-state.json` | Persisted route/run/message state path |
+| `runMessageTtlMs` | number | no | `1800000` | TTL for persisted run-message binding |
+
+### `config.throttle`
+
+| Field | Type | Required | Default | Notes |
+|---|---|---:|---|---|
+| `minEmitIntervalMs` | number | no | `1000` | Minimum emit interval |
+| `heartbeatIntervalMs` | number | no | `5000` | Heartbeat checkpoint interval |
+
+---
+
+## Route & receive-id behavior (important)
+
+The plugin supports both Feishu route types:
+
+- `chat_id` (e.g. `oc_xxx`) → sent with `receive_id_type=chat_id`
+- `open_id` (e.g. `ou_xxx`) → sent with `receive_id_type=open_id`
+
+DM scenarios may expose only open-id-like values in canonical hook context. Current implementation supports this by allowing `open_id` route fallback and carrying `receiveIdType` through emit.
+
+### Normalization rule
+
+When route type is `open_id`, persisted/restored and newly bound route ids are normalized to `ou_...` format. `user:ou_...` is rewritten to `ou_...` before Feishu API calls.
 
 ---
 
@@ -157,11 +166,51 @@ This minimizes message spam and keeps progress readable.
 
 ---
 
+## Troubleshooting
+
+### Symptom: route missing
+
+Log examples:
+- `skip route bind: missing conversationId in message_received`
+- `skip before_tool_call/after_tool_call: route not found`
+
+Action:
+- temporarily set `feishu.defaultConversationId` for continuity,
+- then fix upstream canonical mapping so `conversationId` is available in hooks.
+
+### Symptom: Feishu invalid receive_id
+
+Log example:
+- `code=230001 invalid receive_id`
+
+Action:
+- verify id type matches target (`oc_...` for `chat_id`, `ou_...` for `open_id`),
+- verify target exists and bot has permission in that chat/user scope.
+
+### Symptom: open_id rejected (`99992351`)
+
+Log example:
+- `not a valid {open_id}`
+- invalid id contains `user:ou_...`
+
+Action:
+- use current version with open_id normalization,
+- if needed, remove stale state file and restart once.
+
+---
+
 ## Security notes
 
 - Do **not** hardcode secrets into source files.
 - Store `appSecret` in secure config/secrets management.
 - Restrict plugin allowlist in OpenClaw config.
+
+---
+
+## Changelog highlights
+
+- **PR #28**: support DM `open_id` route fallback when `chat_id` is unavailable in canonical hook context.
+- **PR #29**: normalize persisted/bound `open_id` route ids (`user:ou_...` → `ou_...`) to prevent Feishu invalid-open-id failures after restart.
 
 ---
 
